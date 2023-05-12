@@ -6,9 +6,13 @@
 #include <sys/stat.h>
 
 #define BUFFER_SIZE 1024
-#define ARCHIVE_HEADER_SIZE 512
+#define sizeof(metadata) 512
 
-struct archive_file_header {
+struct header {
+    unsigned int meta_data_offset;
+};
+
+struct metadata{
     char file_name[100];
     unsigned int file_size;
     unsigned int file_offset;
@@ -21,15 +25,11 @@ void create_archive(const char* archive_file_name, const char* source_dir_path, 
         exit(1);
     }
 
-    // Write archive header
-    char header[ARCHIVE_HEADER_SIZE];
-    memset(header, 0, ARCHIVE_HEADER_SIZE);
-    fwrite(header, ARCHIVE_HEADER_SIZE, 1, archive_file);
 
     // Write files to archive
-    unsigned int offset = ARCHIVE_HEADER_SIZE;
-    struct archive_file_header archive_file_headers[num_files];
-    int archive_file_headers_index = 0;
+    unsigned int offset = sizeof(metadata);
+    struct metadata metadata_array[num_files];
+    int metadata_index = 0;
 
     for (int i = 0; i < num_files; i++) {
         char* file_path = files_to_archive[i];
@@ -51,10 +51,10 @@ void create_archive(const char* archive_file_name, const char* source_dir_path, 
             free(buffer);
 
             // Add file header to archive header array
-            strncpy(archive_file_headers[archive_file_headers_index].file_name, file_path, 100);
-            archive_file_headers[archive_file_headers_index].file_size = file_size;
-            archive_file_headers[archive_file_headers_index].file_offset = offset;
-            archive_file_headers_index++;
+            strncpy(metadata_array[metadata_index].file_name, file_path, 100);
+            metadata_array[metadata_index].file_size = file_size;
+            metadata_array[metadata_index].file_offset = offset;
+            metadata_index++;
 
             // Update offset for next file
             offset += file_size;
@@ -84,7 +84,13 @@ void create_archive(const char* archive_file_name, const char* source_dir_path, 
     }
 
     // Write archive header dictionary
-    fwrite(&archive_file_headers, sizeof(struct archive_file_header), num_files, archive_file);
+    // fwrite(&headers, sizeof(struct header), num_files, archive_file);
+
+        // Write archive header
+    struct header archive_header;
+    archive_header.meta_data_offset = offset + sizeof(struct header);
+    fseek(archive_file, 0, SEEK_SET);
+    fwrite(&archive_header, sizeof(struct header), 1, archive_file);
 
     fclose(archive_file);
 }
