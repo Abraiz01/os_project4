@@ -40,6 +40,7 @@ void extract_archive(char *archiveFileName);
 void read_archive_metadata(char *archiveFileName);
 void display_hierarchy(char *archiveFileName);
 void display_node(struct node *node, int depth);
+void append_file(char *archiveFileName, char *filename);
 
 int main(int argc, char *argv[])
 {
@@ -61,7 +62,8 @@ int main(int argc, char *argv[])
 
     create_archive(archiveFileName, listoffilesandfolders, numfiles);
     //display_hierarchy(archiveFileName);
-    //read_archive_metadata(archiveFileName);
+    append_file(archiveFileName, "7.txt");
+    read_archive_metadata(archiveFileName);
     extract_archive(archiveFileName);
 
     return 0;
@@ -113,7 +115,7 @@ int list(const char *fpath, const struct stat *sb, int typeflag) {
         metadata = realloc(metadata, (metadatalength+1)*sizeof(struct metadata));
         strcpy(metadata[metadatalength].file_name, fpath);
         metadata[metadatalength].file_size = sb->st_size;
-        metadata[metadatalength].file_offset = totalfilesize;
+        metadata[metadatalength].file_offset = totalfilesize + sizeof(totalfilesize) + sizeof(struct header);
         metadatalength++;
         
         // Open file for reading
@@ -167,6 +169,8 @@ void extract_archive(char *archiveFileName) {
         unsigned int filesize = metadata[i].file_size;
         unsigned int fileoffset = metadata[i].file_offset;
 
+        printf("EXTRACT fileoffset: %u\n", fileoffset);
+
         // Create parent directories if necessary
         char *parentdir = strdup(filename);
         char *dirpath = dirname(parentdir);
@@ -182,13 +186,13 @@ void extract_archive(char *archiveFileName) {
             printf("Error: Could not create file %s\n", filename);
             exit(1);
         }
-        fseek(filefp, reader_header.meta_data_offset + fileoffset, SEEK_SET);
+        fseek(filefp, fileoffset, SEEK_SET);
         char buffer[1024];
         size_t bytes_read;
         unsigned int bytes_left = filesize;
-        while (bytes_left > 0 && (bytes_read = fread(buffer, 1, sizeof(buffer), filefp)) > 0) {
-            fwrite(buffer, 1, bytes_read, outfile);
-            bytes_left -= bytes_read;
+        while (bytes_left > 0 && (bytes_read = fread(buffer, 1, bytes_left, filefp)) > 0) {
+            fwrite(buffer, bytes_read, 1, outfile);
+            bytes_left -= bytes_read;        
         }
         fclose(outfile);
     }
@@ -322,3 +326,114 @@ void display_node(struct node *node, int depth) {
         display_node(child, depth+1);
     }
 }
+
+void append_file(char *archiveFileName, char *filename){
+    filefp = fopen(archiveFileName, "rb");
+    if (filefp == NULL) {
+        printf("Error: Could not open archive file\n");
+        exit(1);
+    }
+
+    // Read archive header
+    struct header reader_header;
+    fread(&totalfilesize, sizeof(totalfilesize), 1, filefp);
+    printf("reader_header.totalfilesize: %u\n", totalfilesize);
+    fread(&reader_header, sizeof(struct header), 1, filefp);
+
+    // Read metadata from archive file
+    fseek(filefp, reader_header.meta_data_offset, SEEK_SET);
+    unsigned int old_meta_data_offset = reader_header.meta_data_offset;
+
+    printf("reader_header.meta_data_offset: %u\n", reader_header.meta_data_offset);
+    printf("reader_header.metadata_length: %u\n", reader_header.metadata_length);
+
+    printf("metadatalength: %d\n", metadatalength);
+
+    metadata = malloc(metadatalength * sizeof(struct metadata));
+    fread(metadata, sizeof(struct metadata), metadatalength, filefp);
+
+    printf("Metadata:\n");
+    for (int i = 0; i < metadatalength; i++) {
+        printf("File name: %s\n", metadata[i].file_name);
+        printf("File size: %u\n", metadata[i].file_size);
+        printf("File offset: %u\n", metadata[i].file_offset);
+    }
+
+    // fclose(filefp);
+
+     printf("1\n");
+
+    // Open file to append
+    FILE *appendfp = fopen(filename, "rb");
+    if (appendfp == NULL) {
+        printf("Error: Could not open file to append\n");
+        exit(1);
+    }
+    printf("2\n");
+
+    // Get file size
+    fseek(appendfp, 0, SEEK_END);
+    unsigned int filesize = ftell(appendfp);
+    fseek(appendfp, 0, SEEK_SET);
+    printf("3\n");
+
+    // Get file name
+    char *filenameptr = strrchr(filename, '/');
+    if (filenameptr == NULL) {
+        filenameptr = filename;
+    } else {
+        filenameptr++;
+    }
+    printf("4\n");
+
+    // Create new metadata entry
+    metadata = realloc(metadata, (metadatalength+1)*sizeof(struct metadata));
+    strcpy(metadata[metadatalength].file_name, filenameptr);
+    metadata[metadatalength].file_size = filesize;
+    metadata[metadatalength].file_offset = totalfilesize + sizeof(totalfilesize) + sizeof(struct header);
+    metadatalength++;
+    totalfilesize += filesize;
+    printf("5\n");
+
+    // Write new
+    filefp = fopen(archiveFileName, "wb");
+    if (filefp == NULL) {
+        printf("Error: Could not open archive file\n");
+        exit(1);
+    }
+    printf("6\n");
+
+
+    // Write new header
+    struct header writer_header;
+    writer_header.meta_data_offset = totalfilesize + sizeof(totalfilesize) + sizeof(struct header);
+    writer_header.metadata_length = metadatalength;
+    fwrite(&totalfilesize, sizeof(totalfilesize), 1, filefp);
+    fwrite(&writer_header, sizeof(struct header), 1, filefp);
+
+    fseek(filefp, old_meta_data_offset-1, SEEK_SET);
+    printf("7\n");
+
+    char buffer[1024];
+    size_t bytes_read;
+    unsigned int bytes_left = filesize;
+    while (bytes_left > 0 && (bytes_read = fread(buffer, 1, bytes_left, appendfp)) > 0) {
+        fwrite(buffer, bytes_read, 1, filefp);
+        bytes_left -= bytes_read; 
+    }
+    printf("8\n");
+
+    // Write new metadata
+    fseek(filefp, writer_header.meta_data_offset, SEEK_SET);
+    for(int i = 0 ; i<metadatalength;i++){
+        fwrite(&metadata[i], sizeof(metadata[i]), 1, filefp);
+    }
+    printf("9\n");
+
+    fclose(filefp);
+
+    // Free memory  
+    fclose(appendfp);
+
+}
+
